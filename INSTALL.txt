@@ -1,0 +1,7 @@
+https://gitlab.arm.com/tooling/gnu-toolchains-for-arm
+sudo pacman -S --needed base-devel libstatgrab libnsl
+wget https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi.tar.xz
+sudo mkdir -p /opt/arm-toolchain
+sudo tar -xJf arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi.tar.xz -C /opt/arm-toolchain --strip-components=1
+
+sudo pacman -S openocd stlink

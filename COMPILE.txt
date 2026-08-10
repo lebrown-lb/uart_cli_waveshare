@@ -1,0 +1,2 @@
+arm-none-eabi-gcc -I ./CMSIS/Include -I ./CMSIS/Device/ST/STM32L4xx/Include  -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -O2 -g -Wall -T STM32L432KCUX_FLASH.ld --specs=nano.specs -Wl,--gc-sections main.c startup_stm32l432kcux.s -o main.elf
+openocd -f interface/stlink.cfg -f target/stm32l4x.cfg -c "program main.elf verify reset exit"
