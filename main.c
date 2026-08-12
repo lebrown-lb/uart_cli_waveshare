@@ -64,29 +64,58 @@ void GPIO_Init(void)
 {
     // --- Configure PA2 (TX) ---
     // Set PA2 mode to Alternate Function (10 binary)
+    // Set PA2 Alternate Function to AF7 (0111 binary) on Low Register
     GPIOA->MODER &= ~GPIO_MODER_MODE2_Msk;
     GPIOA->MODER |= (2UL << GPIO_MODER_MODE2_Pos);
-
-    // Set PA2 Alternate Function to AF7 (0111 binary) on Low Register
     GPIOA->AFR[0] &= ~(0xFUL << GPIO_AFRL_AFSEL2_Pos);
     GPIOA->AFR[0] |= (7UL << GPIO_AFRL_AFSEL2_Pos);
 
     // --- Configure PA15 (RX) ---
     // Set PA15 mode to Alternate Function (10 binary)
+    // Set PA15 Alternate Function to AF3 (0011 binary) on High Register
     GPIOA->MODER &= ~GPIO_MODER_MODE15_Msk;
     GPIOA->MODER |= (2UL << GPIO_MODER_MODE15_Pos);
-
-    // Set PA15 Alternate Function to AF3 (0011 binary) on High Register
     GPIOA->AFR[1] &= ~(0xFUL << GPIO_AFRH_AFSEL15_Pos);
     GPIOA->AFR[1] |= (3UL << GPIO_AFRH_AFSEL15_Pos);
 
     // Optional: Set high-speed output for TX to ensure crisp edges
     GPIOA->OSPEEDR |= (3UL << GPIO_OSPEEDR_OSPEED2_Pos);
     
-    // Set PB3 as output
-    GPIOB->MODER &= ~(3U << (3 * 2));
-    GPIOB->MODER |=  (1U << (3 * 2));
+        // 2. Configure PA5 (SCK), PA6 (MISO), PA7 (MOSI) for Alternate Function mode (10)
+    GPIOA->MODER &= ~((3U << (5 * 2)) | (3U << (6 * 2)) | (3U << (7 * 2)));
+    GPIOA->MODER |=  ((2U << (5 * 2)) | (2U << (6 * 2)) | (2U << (7 * 2)));
 
+    // 3. Set high speed for PA5, PA6, PA7
+    GPIOA->OSPEEDR |= ((3U << (5 * 2)) | (3U << (6 * 2)) | (3U << (7 * 2)));
+
+    // 4. Map PA5, PA6, PA7 to Alternate Function 5 (SPI1) in AFR[0] (Low Register for pins 0-7)
+    GPIOA->AFR[0] &= ~((0xFU << (5 * 4)) | (0xFU << (6 * 4)) | (0xFU << (7 * 4)));
+    GPIOA->AFR[0] |=  ((5U  << (5 * 4)) | (5U  << (6 * 4)) | (5U  << (7 * 4))); 
+     
+    // Set PA4,PB3,PB4,PB5 as output
+    GPIOA->MODER &= ~GPIO_MODER_MODE4_Msk;
+    GPIOA->MODER |=  (1UL << GPIO_MODER_MODE4_Pos);
+    GPIOB->MODER &= ~GPIO_MODER_MODE3_Msk;
+    GPIOB->MODER |=  (1UL << GPIO_MODER_MODE3_Pos);
+    GPIOB->MODER &= ~GPIO_MODER_MODE4_Msk;
+    GPIOB->MODER |=  (1UL << GPIO_MODER_MODE4_Pos);
+    GPIOB->MODER &= ~GPIO_MODER_MODE5_Msk;
+    GPIOB->MODER |=  (1UL << GPIO_MODER_MODE5_Pos);
+
+}
+
+void SPI1_Init(void)
+{
+        // 5. Configure SPI1 Control Register 1 (CR1)
+    // Master mode (MSTR), Software slave management (SSM + SSI), Baud rate = fPCLK / 8 (BR = 010)
+    SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI | (2U << SPI_CR1_BR_Pos);
+
+    // 6. Configure SPI1 Control Register 2 (CR2)
+    // 8-bit data size (DS = 0111), Motorola frame format, SS output enable if needed
+    SPI1->CR2 = (7U << SPI_CR2_DS_Pos) | SPI_CR2_FRXTH;
+
+    // 7. Enable SPI1 peripheral
+    SPI1->CR1 |= SPI_CR1_SPE;
 }
 
 void USART2_Init(void)
@@ -213,9 +242,13 @@ int main(void)
 
     // Enable USART2 clock (APB1 bus 1)
     RCC->APB1ENR1 |= RCC_APB1ENR1_USART2EN;
+
+    // Enable SPI1 clock
+    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
     
     GPIO_Init();
     USART2_Init();
+    SPI1_Init();
     TIM1_Init();
     __enable_irq(); 
 
