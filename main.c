@@ -1,5 +1,6 @@
 #define STM32L432xx
 #include "stm32l4xx.h"
+#include "ssd1331.h"
 
 volatile uint8_t led_flg = 0;
 volatile uint8_t usart2_flg = 0;
@@ -106,6 +107,14 @@ void GPIO_Init(void)
 
 void SPI1_Init(void)
 {
+    // 3. Ensure SPI is disabled while changing configuration
+    SPI1->CR1 &= ~SPI_CR1_SPE;
+
+    // 4. Clear old BR bits and set new prescaler (e.g., divide by 16)
+    // Formula: SPI_CLK = APB2_CLOCK / Prescaler
+    SPI1->CR1 &= ~SPI_CR1_BR;          // Clears BR[2:0] (sets division by 2)
+    SPI1->CR1 |= SPI_CR1_BR_0 | SPI_CR1_BR_1; // Sets BR = 011 -> divide by 16
+    
         // 5. Configure SPI1 Control Register 1 (CR1)
     // Master mode (MSTR), Software slave management (SSM + SSI), Baud rate = fPCLK / 8 (BR = 010)
     SPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_SSM | SPI_CR1_SSI | (2U << SPI_CR1_BR_Pos);
@@ -253,6 +262,14 @@ int main(void)
     __enable_irq(); 
 
     USART2_WriteString("PROGRAM START\r\n");
+    ssd1331_init();
+    ssd1331_clear_screen(BLACK);
+    ssd1331_draw_rect(0, 0, 95, 63, PURPLE);
+    ssd1331_draw_rect(5, 5, 85, 53, YELLOW);
+    ssd1331_draw_rect(10, 10, 75, 43, RED);
+    ssd1331_draw_rect(15, 15, 65, 33, GREEN);
+    ssd1331_draw_rect(20, 20, 55, 23, BLUE);
+    ssd1331_display_string(33,23, "LAB",FONT_1608, CYAN, BLACK);
 
     while(1) 
     {

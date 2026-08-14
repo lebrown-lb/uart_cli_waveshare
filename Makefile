@@ -29,6 +29,9 @@ LDSCRIPT = STM32L432KCUX_FLASH.ld
 
 # C Sources
 C_SOURCES = \
+support_functions.c \
+waveshare/ssd1331.c \
+waveshare/fonts.c \
 main.c \
 	
 # Assembly Sources (Startup file)
@@ -37,7 +40,9 @@ startup_stm32l432kcux.s
 
 # Include Directories (with -I prefix)
 C_INCLUDES = \
+-I. \
 -ICMSIS/Include \
+-Iwaveshare \
 -ICMSIS/Device/ST/STM32L4xx/Include
 
 ###############################################################################
