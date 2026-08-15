@@ -1,11 +1,119 @@
 #define STM32L432xx
+#define RX_STR_LEN		80
+
+#include <limits.h>
+#include <ctype.h>
+#include <string.h>
 #include "stm32l4xx.h"
 #include "ssd1331.h"
 
 volatile uint8_t led_flg = 0;
 volatile uint8_t usart2_flg = 0;
+volatile uint8_t echo_en = 1;
+volatile uint8_t info_en = 0;
 volatile char rx_byte = 0;
 
+__attribute__((weak)) int _close(int file) { (void)file; return -1; }
+__attribute__((weak)) int _lseek(int file, int ptr, int dir) { (void)file; (void)ptr; (void)dir; return -1; }
+__attribute__((weak)) int _read(int file, char *ptr, int len) { (void)file; (void)ptr; (void)len; return 0; }
+__attribute__((weak)) int _write(int file, char *ptr, int len) { (void)file; (void)ptr; (void)len; return 0; }
+__attribute__((weak)) int _fstat(int file, char *ptr, int len) { (void)file; (void)ptr; (void)len; return 0; }
+__attribute__((weak)) int _getpid(void) { return 1;}
+__attribute__((weak)) int _kill(int pid, int sig) {(void)pid; (void)sig; return -1;}
+__attribute__((weak)) int _isatty(int file) {(void)file; return 1;}
+
+
+/* Private function prototypes -----------------------------------------------*/
+void GPIO_Init(void);
+void SPI1_Init(void);
+void USART2_Init(void);
+void TIM1_Init(void);
+
+void USART2_WriteChar(char ch);
+void USART2_WriteString(const char * str);
+
+void cmd_handler(char * cmd_str);
+void text_cmd_parse_and_exec(char * value_str, uint8_t chSize);
+void rect_cmd_parse_and_exec(char * value_str);
+void fill_cmd_parse_and_exec(char * value_str);
+void line_cmd_parse_and_exec(char * value_str);
+void circle_cmd_parse_and_exec(char * value_str);
+enum Color string_to_color(char * str);
+unsigned long string_to_uint(const char *nptr, char **endptr);
+static size_t int_to_str(char *buf, size_t max_len, int value); 
+
+
+int main(void) 
+{
+    uint8_t uart2_cnt = 0;
+	char uart2_str[RX_STR_LEN];
+
+    // Enable GPIOB clock (example for PB3)
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOBEN;
+
+    // Enable GPIOA clock (AHB2 bus)
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
+
+    // Enable USART2 clock (APB1 bus 1)
+    RCC->APB1ENR1 |= RCC_APB1ENR1_USART2EN;
+
+    // Enable SPI1 clock
+    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
+    
+    GPIO_Init();
+    USART2_Init();
+    SPI1_Init();
+    TIM1_Init();
+    __enable_irq(); 
+
+    USART2_WriteString("PROGRAM START\r\n");
+    ssd1331_init();
+    ssd1331_clear_screen(BLACK);
+    ssd1331_draw_rect(0, 0, 95, 63, PURPLE);
+    ssd1331_draw_rect(5, 5, 85, 53, YELLOW);
+    ssd1331_draw_rect(10, 10, 75, 43, RED);
+    ssd1331_draw_rect(15, 15, 65, 33, GREEN);
+    ssd1331_draw_rect(20, 20, 55, 23, BLUE);
+    ssd1331_display_string(33,23, "LAB",FONT_1608, CYAN, BLACK);
+
+    while(1) 
+    {
+        // Toggle PB3
+        if (led_flg)
+        {
+            GPIOB->ODR ^= (1U << 3);
+            led_flg = 0;
+        }
+        if(usart2_flg)
+        {
+			if (echo_en)
+				USART2_WriteChar(rx_byte);
+
+			if ((rx_byte == '\n') || (rx_byte == '\r'))
+			{
+				uart2_str[uart2_cnt] = '\0';
+				USART2_WriteString("\n\r");
+				cmd_handler(uart2_str);
+				memset(uart2_str,'\0', RX_STR_LEN );
+				uart2_cnt = 0;
+			}
+			else if (uart2_cnt > RX_STR_LEN - 1)
+			{
+				USART2_WriteString("\n\rCharacter limit Exceeded\n\r");
+			}
+			else
+			{
+				uart2_str[uart2_cnt] = rx_byte;
+				uart2_cnt++;
+			}
+			usart2_flg = 0;
+
+        }
+    }
+}
+
+
+/* Initalization Function Definitions -----------------------------------------------*/
 void SystemInit(void) 
 {
     // 1. Enable Power Control clock
@@ -51,14 +159,6 @@ void SystemInit(void)
 
     // 8. Configure AHB/APB prescalers to 1 (HCLK = 80 MHz, PCLK1 = 80 MHz, PCLK2 = 80 MHz)
     RCC->CFGR &= ~(RCC_CFGR_HPRE | RCC_CFGR_PPRE1 | RCC_CFGR_PPRE2);
-}
-
-void delay(volatile uint32_t count) 
-{
-    while (count--) 
-    {
-        __asm__("nop");
-    }
 }
 
 void GPIO_Init(void)
@@ -185,6 +285,9 @@ void TIM1_Init(void)
     TIM1->CR1 |= TIM_CR1_CEN;
 }
 
+
+
+/* USART Communication Function Definitions -----------------------------------------------*/
 void USART2_WriteChar(char ch) 
 {
     // Wait until Transmit Data Register Empty flag (TXE) is set
@@ -210,6 +313,603 @@ void USART2_WriteString(const char * str)
 
 }
 
+
+/**
+  * @brief uart command handler
+  * @param cmd_str - command string
+  * @retval None
+  */
+void cmd_handler(char * cmd_str)
+{
+	uint8_t i = 0;
+	char cmd[RX_STR_LEN];
+	char value[RX_STR_LEN];
+	char tmp[50];
+	uint8_t cmd_cnt = 0;
+	uint8_t value_cnt = 0;
+	char * str_ptr = cmd;
+	char c;
+	unsigned long x;
+	char * endptr = NULL;
+
+
+	value[0] = '\0';
+	if (strchr(cmd_str, ':') == NULL)
+	{
+		strcpy(cmd, cmd_str);
+		memset(value,'\0', RX_STR_LEN);
+	}
+	else
+	{
+		for (i = 0; i < strlen(cmd_str); i++)
+		{
+			c = cmd_str[i];
+			if (c == ':')
+			{
+				*str_ptr = '\0';
+				str_ptr = value;
+			}
+			else
+			{
+				*str_ptr = c;
+				str_ptr++;
+			}
+
+
+		}
+		*str_ptr = '\0';
+	}
+	cmd_cnt = strlen(cmd);
+	value_cnt = strlen(value);
+
+	if(info_en)
+	{
+
+        USART2_WriteString("CMD: ");
+		int_to_str(tmp, sizeof(tmp), cmd_cnt);
+		USART2_WriteString(tmp);
+        USART2_WriteString("VALUE: \n\r");
+		int_to_str(tmp, sizeof(tmp), value_cnt);
+		USART2_WriteString(tmp);
+        USART2_WriteString("\n\r");
+	}
+
+
+	if(strcmp("info", cmd) == 0)
+	{
+		if(value_cnt == 0)
+		{
+			int_to_str(tmp,sizeof(tmp), info_en);
+			USART2_WriteString(tmp);
+		}
+		else
+		{
+			x = string_to_uint(value,&endptr);
+			if(endptr == value)
+				USART2_WriteString("INVALID INPUT!\n\r");
+			else
+				info_en = (uint8_t)x;
+		}
+	}
+	else if(strcmp("echo", cmd) == 0)
+	{
+		if(value_cnt == 0)
+		{
+			int_to_str(tmp,sizeof(tmp), echo_en);
+			USART2_WriteString(tmp);
+		}
+		else
+		{
+			x = string_to_uint(value,&endptr);
+			if(endptr == value)
+				USART2_WriteString("INVALID INPUT!\n\r");
+			else
+				echo_en = (uint8_t)x;
+		}
+	}
+	else if(strcmp("clear", cmd) == 0)
+	{
+		if(value_cnt == 0)
+			USART2_WriteString("clear:<color>\n\r");
+		else
+			ssd1331_clear_screen(string_to_color(value));
+	}
+	else if(strcmp("stext", cmd) == 0)
+	{
+		if(value_cnt == 0)
+			USART2_WriteString("stext:<x>,<y>,<text>,<color>,<bcolor>\n\r");
+		else
+			text_cmd_parse_and_exec(value,FONT_1206);
+	}
+	else if(strcmp("ltext", cmd) == 0)
+	{
+		if(value_cnt == 0)
+			USART2_WriteString("stext:<x>,<y>,<text>,<color>,<bcolor>\n\r");
+		else
+			text_cmd_parse_and_exec(value,FONT_1608);
+	}
+	else if(strcmp("rect", cmd) == 0)
+	{
+		if(value_cnt == 0)
+			USART2_WriteString("rect:<x>,<y>,<l>,<h>,<color>\n\r");
+		else
+			rect_cmd_parse_and_exec(value);
+	}
+	else if(strcmp("fill", cmd) == 0)
+	{
+		if(value_cnt == 0)
+			USART2_WriteString("fill:<x>,<y>,<l>,<h>,<color>\n\r");
+		else
+			fill_cmd_parse_and_exec(value);
+	}
+	else if(strcmp("line", cmd) == 0)
+	{
+		if(value_cnt == 0)
+			USART2_WriteString("line:<x0>,<y0>,<x1>,<y1>,<color>\n\r");
+		else
+			line_cmd_parse_and_exec(value);
+	}
+	else if(strcmp("circle", cmd) == 0)
+	{
+		if(value_cnt == 0)
+			USART2_WriteString("circle:<x>,<y>,<radius>,<color>\n\r");
+		else
+			circle_cmd_parse_and_exec(value);
+	}
+
+}
+
+
+/**
+  * @brief parses and executes a text command if value_str conditions are met
+  * @param value_str - string containing parameters to execute the command
+  * @retval None
+  */
+void text_cmd_parse_and_exec(char * value_str, uint8_t chSize)
+{
+	char * token = NULL;
+	char * tokens[5] ={NULL,NULL,NULL,NULL,NULL};
+	uint8_t cnt = 0;
+	char * endptr = NULL;
+
+	token = strtok(value_str, ",");
+	if(token == NULL)
+	{
+		USART2_WriteString("INVALID VALUE FOR COMMAND!\n\r");
+		return;
+	}
+
+	while(token != NULL)
+	{
+		if(cnt < 5)
+			tokens[cnt] = token;
+		token = strtok(NULL,",");
+		cnt++;
+	}
+
+	if((cnt < 4)||(cnt > 5))
+	{
+		USART2_WriteString("INVALID OPTIONS FOR COMMAND!\n\r");
+		return;
+	}
+	uint8_t xp = (uint8_t)string_to_uint(tokens[0], &endptr);
+	if(endptr == tokens[0])
+	{
+		USART2_WriteString("<x> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+	uint8_t yp = (uint8_t)string_to_uint(tokens[1], &endptr);
+	if(endptr == tokens[1])
+	{
+		USART2_WriteString("<y> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+
+	if(cnt == 5)
+		ssd1331_display_string(xp,yp,tokens[2], chSize, string_to_color(tokens[3]), string_to_color(tokens[4]));
+	else
+		ssd1331_display_string(xp,yp,tokens[2], chSize, string_to_color(tokens[3]), BLACK);
+
+
+}
+
+
+/**
+  * @brief parses and executes a rect command if value_str conditions are met
+  * @param value_str - string containing parameters to execute the command
+  * @retval None
+  */
+void rect_cmd_parse_and_exec(char * value_str)
+{
+	char * token = NULL;
+	char * tokens[5] ={NULL,NULL,NULL,NULL,NULL};
+	uint8_t cnt = 0;
+    char * endptr = NULL;
+
+	token = strtok(value_str, ",");
+	if(token == NULL)
+	{
+		USART2_WriteString("INVALID VALUE FOR COMMAND!\n\r");
+		return;
+	}
+
+	while(token != NULL)
+	{
+		if(cnt < 5)
+			tokens[cnt] = token;
+		token = strtok(NULL,",");
+		cnt++;
+	}
+
+	if(cnt != 5)
+	{
+		USART2_WriteString("INVALID OPTIONS FOR COMMAND!\n\r");
+		return;
+	}
+    uint8_t xp = (uint8_t)string_to_uint(tokens[0], &endptr);
+	if(endptr == tokens[0])
+	{
+		USART2_WriteString("<x> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+	uint8_t yp = (uint8_t)string_to_uint(tokens[1], &endptr);
+	if(endptr == tokens[1])
+	{
+		USART2_WriteString("<y> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+	uint8_t l = (uint8_t)string_to_uint(tokens[2], &endptr);
+	if(endptr == tokens[2])
+	{
+		USART2_WriteString("<l> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+	uint8_t h = (uint8_t)string_to_uint(tokens[3], &endptr);
+	if(endptr == tokens[3])
+	{
+		USART2_WriteString("<h> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+
+	ssd1331_draw_rect(xp,yp,l,h, string_to_color(tokens[4]));
+}
+
+
+/**
+  * @brief parses and executes a fill command if value_str conditions are met
+  * @param value_str - string containing parameters to execute the command
+  * @retval None
+  */
+void fill_cmd_parse_and_exec(char * value_str)
+{
+	char * token = NULL;
+    char * tokens[5] ={NULL,NULL,NULL,NULL,NULL};
+    uint8_t cnt = 0;
+    char * endptr = NULL;
+
+    token = strtok(value_str, ",");
+    if(token == NULL)
+    {
+        USART2_WriteString("INVALID VALUE FOR COMMAND!\n\r");
+        return;
+    }
+
+    while(token != NULL)
+    {
+        if(cnt < 5)
+            tokens[cnt] = token;
+        token = strtok(NULL,",");
+        cnt++;
+    }
+
+    if(cnt != 5)
+    {
+        USART2_WriteString("INVALID OPTIONS FOR COMMAND!\n\r");
+        return;
+    }
+    uint8_t xp = (uint8_t)string_to_uint(tokens[0], &endptr);
+	if(endptr == tokens[0])
+	{
+		USART2_WriteString("<x> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+	uint8_t yp = (uint8_t)string_to_uint(tokens[1], &endptr);
+	if(endptr == tokens[1])
+	{
+		USART2_WriteString("<y> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+	uint8_t l = (uint8_t)string_to_uint(tokens[2], &endptr);
+	if(endptr == tokens[2])
+	{
+		USART2_WriteString("<l> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+	uint8_t h = (uint8_t)string_to_uint(tokens[3], &endptr);
+	if(endptr == tokens[3])
+	{
+		USART2_WriteString("<h> OPTIONS IS INVALID!\n\r");
+		return;
+	}
+
+    ssd1331_fill_rect(xp,yp,l,h, string_to_color(tokens[4]));
+}
+
+
+/**
+  * @brief parses and executes a line command if value_str conditions are met
+  * @param value_str - string containing parameters to execute the command
+  * @retval None
+  */
+void line_cmd_parse_and_exec(char * value_str)
+{
+	char * token = NULL;
+    char * tokens[5] ={NULL,NULL,NULL,NULL,NULL};
+    uint8_t cnt = 0;
+    char * endptr = NULL;
+    
+    token = strtok(value_str, ",");
+    if(token == NULL)
+    {
+        USART2_WriteString("INVALID VALUE FOR COMMAND!\n\r");
+        return;
+    }
+
+    while(token != NULL)
+    {
+        if(cnt < 5)
+            tokens[cnt] = token;
+        token = strtok(NULL,",");
+        cnt++;
+    }
+
+    if(cnt != 5)
+    {
+        USART2_WriteString("INVALID OPTIONS FOR COMMAND!\n\r");
+        return;
+    }
+    uint8_t x0 = (uint8_t)string_to_uint(tokens[0], &endptr);
+    if(endptr == tokens[0])
+    {
+        USART2_WriteString("<x0> OPTIONS IS INVALID!\n\r");
+        return;
+    }
+    uint8_t y0 = (uint8_t)string_to_uint(tokens[1], &endptr);
+    if(endptr == tokens[1])
+    {
+        USART2_WriteString("<y0> OPTIONS IS INVALID!\n\r");
+        return;
+    }
+    uint8_t x1 = (uint8_t)string_to_uint(tokens[2], &endptr);
+    if(endptr == tokens[2])
+    {
+        USART2_WriteString("<x1> OPTIONS IS INVALID!\n\r");
+        return;
+    }
+    uint8_t y1 = (uint8_t)string_to_uint(tokens[3], &endptr);
+    if(endptr == tokens[3])
+    {
+        USART2_WriteString("<y1> OPTIONS IS INVALID!\n\r");
+        return;
+    }
+
+    ssd1331_draw_line(x0,y0,x1,y1, string_to_color(tokens[4]));
+}
+
+
+/**
+  * @brief parses and executes a circle command if value_str conditions are met
+  * @param value_str - string containing parameters to execute the command
+  * @retval None
+  */
+void circle_cmd_parse_and_exec(char * value_str)
+{
+	char * token = NULL;
+    char * tokens[4] ={NULL,NULL,NULL,NULL};
+    uint8_t cnt = 0;
+    char * endptr = NULL;
+
+    token = strtok(value_str, ",");
+    if(token == NULL)
+    {
+        USART2_WriteString("INVALID VALUE FOR COMMAND!\n\r");
+        return;
+    }
+
+    while(token != NULL)
+    {
+        if(cnt < 4)
+            tokens[cnt] = token;
+        token = strtok(NULL,",");
+        cnt++;
+    }
+
+    if(cnt != 4)
+    {
+        USART2_WriteString("INVALID OPTIONS FOR COMMAND!\n\r");
+        return;
+    }
+    uint8_t xp = (uint8_t)string_to_uint(tokens[0], &endptr);
+    if(endptr == tokens[0])
+    {
+        USART2_WriteString("<x> OPTIONS IS INVALID!\n\r");
+        return;
+    }
+    uint8_t yp = (uint8_t)string_to_uint(tokens[1], &endptr);
+    if(endptr == tokens[1])
+    {
+        USART2_WriteString("<y> OPTIONS IS INVALID!\n\r");
+        return;
+    }
+    uint8_t radius = (uint8_t)string_to_uint(tokens[2], &endptr);
+    if(endptr == tokens[2])
+    {
+        USART2_WriteString("<radius> OPTIONS IS INVALID!\n\r");
+        return;
+    }
+    ssd1331_draw_circle(xp, yp, radius, string_to_color(tokens[3]));
+}
+
+
+/**
+  * @brief converts a string to Color
+  * @param str - string containing number
+  * @retval Color enum value
+  */
+enum Color string_to_color(char * str)
+{
+	enum Color tmp;
+
+	if((strcmp("BLACK", str) == 0) || (strcmp("black", str) == 0))
+		tmp = BLACK;
+	else if((strcmp("GREY", str) == 0) || (strcmp("grey", str) == 0))
+		tmp = GREY;
+	else if((strcmp("WHITE", str) == 0) || (strcmp("white", str) == 0))
+		tmp = WHITE;
+	else if((strcmp("RED", str) == 0) || (strcmp("red", str) == 0))
+		tmp = RED;
+	else if((strcmp("PINK", str) == 0) || (strcmp("pink", str) == 0))
+		tmp = PINK;
+	else if((strcmp("YELLOW", str) == 0) || (strcmp("yellow", str) == 0))
+		tmp = YELLOW;
+	else if((strcmp("GOLDEN", str) == 0) || (strcmp("golden", str) == 0))
+		tmp = GOLDEN;
+	else if((strcmp("BROWN", str) == 0) || (strcmp("brown", str) == 0))
+		tmp = BROWN;
+	else if((strcmp("BLUE", str) == 0) || (strcmp("blue", str) == 0))
+		tmp = BLUE;
+	else if((strcmp("CYAN", str) == 0) || (strcmp("cyan", str) == 0))
+		tmp = CYAN;
+	else if((strcmp("GREEN", str) == 0) || (strcmp("green", str) == 0))
+		tmp = GREEN;
+	else if((strcmp("PURPLE", str) == 0) || (strcmp("purple", str) == 0))
+		tmp = PURPLE;
+	else
+		tmp = BLACK;
+
+	return tmp;
+}
+
+
+/* Helper Function Definitions -----------------------------------------------*/
+/**
+  * @brief converts a string to unsigned int
+  * @param str - string containing number
+  * @param errnum - unsigned integer representing a success or failure
+  * @retval None
+  */
+unsigned long string_to_uint(const char *nptr, char **endptr)
+{
+
+    const char *s = nptr;
+    unsigned long acc = 0;
+    int c;
+    int any = 0;
+    int neg = 0;
+
+    // 1. Skip leading whitespace
+    do {
+        c = (unsigned char)*s++;
+    } while (isspace(c));
+
+    // 2. Handle optional sign
+    if (c == '-') {
+        neg = 1;
+        c = *s++;
+    } else if (c == '+') {
+        c = *s++;
+    }
+
+    // 3. Pre-calculated limits for base 10 overflow protection
+    const unsigned long cutoff = ULONG_MAX / 10;
+    const int cutlim = (int)(ULONG_MAX % 10);
+
+    // 4. Convert digits
+    while (isdigit(c)) {
+        c -= '0';
+        
+        // Check for overflow before multiplying
+        if (any < 0 || acc > cutoff || (acc == cutoff && c > cutlim)) {
+            any = -1;
+        } else {
+            any = 1;
+            acc = acc * 10 + c;
+        }
+        c = (unsigned char)*s++;
+    }
+
+    // 5. Finalize output and track end pointer
+    if (any < 0) {
+        acc = ULONG_MAX;
+    } else if (neg) {
+        acc = -acc; // Standard two's complement negation
+    }
+
+    if (endptr != 0) {
+        // Step back by 1 because the while loop read one character past the last valid digit
+        *endptr = (char *)(any ? s - 1 : nptr);
+    }
+
+    return acc;
+}
+
+
+/**
+  * @brief converts an integer to string
+  * @param buf - buffer to cunstruct string in
+  * @param max_len - maximum length allowed by buffer
+  * @param value - int to be converted
+  * @retval size of integer string
+  */
+static size_t int_to_str(char *buf, size_t max_len, int value) 
+{
+    char temp[12]; // Fits 32-bit int + sign + null
+    size_t i = 0;
+    int is_negative = 0;
+
+    if (value == 0) 
+    {
+        temp[i++] = '0';
+    }
+    else 
+    {
+        if (value < 0) 
+        {
+            is_negative = 1;
+            // Handle INT_MIN overflow edge case safely
+            unsigned int uval = (unsigned int)(-value);
+            while (uval > 0) 
+            {
+                temp[i++] = (uval % 10) + '0';
+                uval /= 10;
+            }
+        }
+        else 
+        {
+            while (value > 0) 
+            {
+                temp[i++] = (value % 10) + '0';
+                value /= 10;
+            }
+        }
+    }
+
+    if (is_negative) 
+    {
+        temp[i++] = '-';
+    }
+
+    // Reverse temp array into the destination buffer while checking limits
+    size_t written = 0;
+    while (i > 0 && written < max_len) 
+    {
+        buf[written++] = temp[--i];
+    }
+    return written;
+}
+
+
+/* Interrupt Function Definitions -----------------------------------------------*/
 void TIM1_UP_TIM16_IRQHandler(void) 
 {
     if (TIM1->SR & TIM_SR_UIF) 
@@ -238,54 +938,5 @@ void USART2_IRQHandler(void)
     {
         // Clear overrun flag by writing to Clear Interrupt Flag Register
         USART2->ICR |= USART_ICR_ORECF;
-    }
-}
-
-int main(void) 
-{
-    // Enable GPIOB clock (example for PB3)
-    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOBEN;
-
-    // Enable GPIOA clock (AHB2 bus)
-    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN;
-
-    // Enable USART2 clock (APB1 bus 1)
-    RCC->APB1ENR1 |= RCC_APB1ENR1_USART2EN;
-
-    // Enable SPI1 clock
-    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
-    
-    GPIO_Init();
-    USART2_Init();
-    SPI1_Init();
-    TIM1_Init();
-    __enable_irq(); 
-
-    USART2_WriteString("PROGRAM START\r\n");
-    ssd1331_init();
-    ssd1331_clear_screen(BLACK);
-    ssd1331_draw_rect(0, 0, 95, 63, PURPLE);
-    ssd1331_draw_rect(5, 5, 85, 53, YELLOW);
-    ssd1331_draw_rect(10, 10, 75, 43, RED);
-    ssd1331_draw_rect(15, 15, 65, 33, GREEN);
-    ssd1331_draw_rect(20, 20, 55, 23, BLUE);
-    ssd1331_display_string(33,23, "LAB",FONT_1608, CYAN, BLACK);
-
-    while(1) 
-    {
-        // Toggle PB3
-        if (led_flg)
-        {
-            GPIOB->ODR ^= (1U << 3);
-            led_flg = 0;
-        }
-        if(usart2_flg)
-        {
-            USART2_WriteChar(rx_byte);
-            if(rx_byte == '\n' || rx_byte == '\r')
-                USART2_WriteString("\r\n");
-            usart2_flg = 0;
-
-        }
     }
 }

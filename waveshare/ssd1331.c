@@ -18,7 +18,8 @@
   ******************************************************************************
   */
 
-#include <stdio.h>
+//#include <stdio.h>
+#include <limits.h>
 #include <stdint.h>
 
 
@@ -98,6 +99,21 @@
 /* Private variables ---------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Private functions ---------------------------------------------------------*/
+
+
+int abs(int j) 
+{
+    if (j < 0) {
+        // Handle the edge case where j is INT_MIN.
+        // In standard 2's complement, -INT_MIN causes undefined behavior.
+        if (j == INT_MIN) {
+            return INT_MIN; 
+        }
+        return -j;
+    }
+    return j;
+}
+
 
 /**
  * @brief

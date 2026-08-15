@@ -54,7 +54,7 @@ C_INCLUDES = \
 CFLAGS = $(MCU) $(C_INCLUDES) -O0 -Wall -fdata-sections -ffunction-sections -g -gdwarf-2
 
 # Link Flags
-LDFLAGS = $(MCU) -specs=nano.specs -T$(LDSCRIPT) -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--gc-sections
+LDFLAGS = $(MCU) -specs=nano.specs -specs=nosys.specs  -T$(LDSCRIPT) -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--gc-sections
 
 ###############################################################################
 # BUILD RULES

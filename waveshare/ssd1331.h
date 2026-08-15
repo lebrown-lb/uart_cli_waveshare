@@ -26,7 +26,7 @@
 /* Includes ------------------------------------------------------------------*/
 //#include "MacroAndConst.h"
 #include <math.h>
-#include <stdlib.h>
+//#include <stdlib.h>
 
 #define FONT_1206    12
 #define FONT_1608    16
