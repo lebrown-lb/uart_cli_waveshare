@@ -196,12 +196,8 @@ void GPIO_Init(void)
     // Set PA4,PB3,PB4,PB5 as output
     GPIOA->MODER &= ~GPIO_MODER_MODE4_Msk;
     GPIOA->MODER |=  (1UL << GPIO_MODER_MODE4_Pos);
-    GPIOB->MODER &= ~GPIO_MODER_MODE3_Msk;
-    GPIOB->MODER |=  (1UL << GPIO_MODER_MODE3_Pos);
-    GPIOB->MODER &= ~GPIO_MODER_MODE4_Msk;
-    GPIOB->MODER |=  (1UL << GPIO_MODER_MODE4_Pos);
-    GPIOB->MODER &= ~GPIO_MODER_MODE5_Msk;
-    GPIOB->MODER |=  (1UL << GPIO_MODER_MODE5_Pos);
+    GPIOB->MODER &= ~((3U << (3 * 2)) | (3U << (4 * 2)) | (3U << (5 * 2)));
+    GPIOB->MODER |=  ((1U << (3 * 2)) | (1U << (4 * 2)) | (1U << (5 * 2)));
 
 }
 
@@ -368,7 +364,7 @@ void cmd_handler(char * cmd_str)
         USART2_WriteString("CMD: ");
 		int_to_str(tmp, sizeof(tmp), cmd_cnt);
 		USART2_WriteString(tmp);
-        USART2_WriteString("VALUE: \n\r");
+        USART2_WriteString(" VALUE: ");
 		int_to_str(tmp, sizeof(tmp), value_cnt);
 		USART2_WriteString(tmp);
         USART2_WriteString("\n\r");
@@ -381,6 +377,7 @@ void cmd_handler(char * cmd_str)
 		{
 			int_to_str(tmp,sizeof(tmp), info_en);
 			USART2_WriteString(tmp);
+            USART2_WriteString("\n\r");
 		}
 		else
 		{
@@ -397,6 +394,7 @@ void cmd_handler(char * cmd_str)
 		{
 			int_to_str(tmp,sizeof(tmp), echo_en);
 			USART2_WriteString(tmp);
+            USART2_WriteString("\n\r");
 		}
 		else
 		{
@@ -905,6 +903,11 @@ static size_t int_to_str(char *buf, size_t max_len, int value)
     {
         buf[written++] = temp[--i];
     }
+    if(written < max_len)
+        buf[written] = '\0';
+    else
+       buf[max_len - 1] = '\0';
+
     return written;
 }
 
