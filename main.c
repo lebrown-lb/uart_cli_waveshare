@@ -792,9 +792,9 @@ enum Color string_to_color(char * str)
 /* Helper Function Definitions -----------------------------------------------*/
 /**
   * @brief converts a string to unsigned int
-  * @param str - string containing number
-  * @param errnum - unsigned integer representing a success or failure
-  * @retval None
+  * @param nptr - string containing number
+  * @param endptr -A pointer to a char* where the function stores the address of the first invalid or unrecognized character after the number. 
+  * @retval the unsigned long integer value
   */
 unsigned long string_to_uint(const char *nptr, char **endptr)
 {
